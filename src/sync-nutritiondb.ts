@@ -17,7 +17,7 @@ export function toNutritionMeasurement(measurement: RenphoMeasurement) {
     bmi: measurement.bmi,
     body_fat_pct: measurement.bodyfat,
     water_pct: measurement.water,
-    muscle_pct: measurement.muscle,
+    muscle_mass_kg: measurement.muscle,
     bone_mass_kg: measurement.bone,
     bmr_kcal: measurement.bmr,
     visceral_fat_level: measurement.visceral_fat,
@@ -33,6 +33,7 @@ export function toNutritionMeasurement(measurement: RenphoMeasurement) {
     source_device_model: measurement.internal_model,
     source_device_name: measurement.scale_name,
     source_method: measurement.method,
+    source_schema_version: 1,
     source_payload_json: JSON.stringify(measurement),
   };
 }
