@@ -146,6 +146,71 @@ test('fetchMeasurementsForTable pulls newest pages first when filtering recent t
   assert.deepEqual(results.map((entry: any) => entry.id), [3, 4]);
 });
 
+test('getMeasurements reads rows from the body-composition store when legacy count is zero', async () => {
+  const service = createService() as any;
+  const session = {
+    ...createSession(),
+    scaleUserIds: ['scale-1'],
+    scaleTables: [{ table_name: 'table_a', user_ids: ['scale-1'], count: 0 }]
+  };
+  service.authenticate = async () => session;
+  service.postEncryptedRaw = async (path: string) => {
+    if (path.includes('queryBodyCompositionMeasureData')) {
+      return '[{"id":90071992547409930,"timeStamp":300,"bUserId":"user-1","subUserId":"scale-1","weight":67.1,"bodyfat":18.2}]';
+    }
+    return '[]';
+  };
+
+  const measurements = await service.getMeasurements(undefined, undefined, 10);
+
+  assert.equal(measurements.length, 1);
+  assert.equal(measurements[0].id, '90071992547409930');
+  assert.equal(measurements[0].weight, 67.1);
+  assert.equal(measurements[0].bodyfat, 18.2);
+});
+
+test('getMeasurements prefers the richer body-composition row when both stores contain the same id', async () => {
+  const service = createService() as any;
+  const session = {
+    ...createSession(),
+    scaleUserIds: ['scale-1'],
+    scaleTables: [{ table_name: 'table_a', user_ids: ['scale-1'], count: 1 }]
+  };
+  service.authenticate = async () => session;
+  service.postEncryptedRaw = async (path: string) => {
+    if (path.includes('queryBodyCompositionMeasureData')) {
+      return '[{"id":123,"timeStamp":300,"bUserId":"user-1","subUserId":"scale-1","weight":67.1,"bodyfat":18.2}]';
+    }
+    return '[{"id":123,"timeStamp":300,"bUserId":"user-1","subUserId":"scale-1","weight":67.1}]';
+  };
+
+  const measurements = await service.getMeasurements(undefined, undefined, 10);
+
+  assert.equal(measurements.length, 1);
+  assert.equal(measurements[0].bodyfat, 18.2);
+});
+
+test('getMeasurements keeps legacy reads working when the body-composition endpoint is unavailable', async () => {
+  const service = createService() as any;
+  const session = {
+    ...createSession(),
+    scaleUserIds: ['scale-1'],
+    scaleTables: [{ table_name: 'table_a', user_ids: ['scale-1'], count: 1 }]
+  };
+  service.authenticate = async () => session;
+  service.postEncryptedRaw = async (path: string) => {
+    if (path.includes('queryBodyCompositionMeasureData')) {
+      throw new Error('endpoint unavailable');
+    }
+    return '[{"id":123,"timeStamp":300,"bUserId":"user-1","subUserId":"scale-1","weight":67.1}]';
+  };
+
+  const measurements = await service.getMeasurements(undefined, undefined, 10);
+
+  assert.equal(measurements.length, 1);
+  assert.equal(measurements[0].weight, 67.1);
+});
+
 test('summarizeDeviceCategories reports every raw category with handled/data flags', async () => {
   const { summarizeDeviceCategories } = await import('../src/services/renpho-api.js');
 

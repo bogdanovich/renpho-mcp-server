@@ -16,6 +16,12 @@ const API_BASE = "https://cloud.renpho.com";
 const ENCRYPTION_SECRET = "ed*wijdi$h6fe3ew";
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_MEASUREMENT_SCAN = 1000;
+const LEGACY_MEASUREMENT_ENDPOINT =
+  "RenphoHealth/scale/queryAllMeasureDataList";
+const BODY_COMPOSITION_MEASUREMENT_ENDPOINT =
+  "RenphoHealth/scale/queryBodyCompositionMeasureData";
+
+type MeasurementStore = "legacy" | "body_composition";
 
 interface CachedSession {
   token: string;
@@ -460,9 +466,12 @@ export class RenphoApiService {
     userIds: string[],
     pageNum: number,
     pageSize: number,
+    store: MeasurementStore = "legacy",
   ): Promise<Array<Record<string, any>>> {
     const rawResponse = await this.postEncryptedRaw(
-      "RenphoHealth/scale/queryAllMeasureDataList",
+      store === "body_composition"
+        ? BODY_COMPOSITION_MEASUREMENT_ENDPOINT
+        : LEGACY_MEASUREMENT_ENDPOINT,
       session,
       {
         pageNum,
@@ -472,7 +481,14 @@ export class RenphoApiService {
       },
     );
 
-    const parsed = JSON.parse(rawResponse) as Array<Record<string, any>>;
+    const decoded = JSON.parse(rawResponse) as
+      | Array<Record<string, any>>
+      | { list?: Array<Record<string, any>> };
+    const parsed = Array.isArray(decoded)
+      ? decoded
+      : Array.isArray(decoded.list)
+        ? decoded.list
+        : [];
     const ids = this.extractIdsAsStrings(rawResponse, "id");
     const boundUserIds = this.extractIdsAsStrings(rawResponse, "bUserId");
     const scaleUserIds = this.extractIdsAsStrings(rawResponse, "subUserId");
@@ -487,6 +503,7 @@ export class RenphoApiService {
       __subUserIdString:
         scaleUserIds[index] ||
         (entry.subUserId != null ? String(entry.subUserId) : undefined),
+      __measurementStore: store,
     }));
   }
 
@@ -552,6 +569,66 @@ export class RenphoApiService {
     }
 
     return collected;
+  }
+
+  private async fetchBodyCompositionMeasurementsForTable(
+    session: CachedSession,
+    table: RenphoScaleTable,
+    userIds: string[],
+    limit: number,
+  ): Promise<Array<Record<string, any>>> {
+    const pageSize = Math.min(DEFAULT_PAGE_SIZE, Math.max(50, limit));
+    const collected: Array<Record<string, any>> = [];
+
+    try {
+      for (
+        let pageNum = 1;
+        collected.length < MAX_MEASUREMENT_SCAN;
+        pageNum++
+      ) {
+        const page = await this.fetchMeasurementPage(
+          session,
+          table.table_name,
+          userIds,
+          pageNum,
+          pageSize,
+          "body_composition",
+        );
+        if (page.length === 0) break;
+
+        collected.push(...page);
+        if (page.length < pageSize) break;
+      }
+    } catch {
+      // Older Renpho backends may not expose this store. Preserve legacy
+      // measurement support instead of failing the entire read.
+      return [];
+    }
+
+    return collected;
+  }
+
+  private async fetchMeasurementsFromAllStores(
+    session: CachedSession,
+    table: RenphoScaleTable,
+    userIds: string[],
+    limit: number,
+    lastAt?: number,
+  ): Promise<Array<Record<string, any>>> {
+    const [bodyComposition, legacy] = await Promise.all([
+      this.fetchBodyCompositionMeasurementsForTable(
+        session,
+        table,
+        userIds,
+        limit,
+      ),
+      this.fetchMeasurementsForTable(session, table, userIds, limit, lastAt),
+    ]);
+
+    // Body-composition rows carry the richer metric set. Put them first so
+    // the existing first-record-wins de-duplication prefers them when both
+    // stores contain the same measurement ID.
+    return [...bodyComposition, ...legacy];
   }
 
   private mapMeasurement(m: Record<string, any>): RenphoMeasurement {
@@ -644,7 +721,7 @@ export class RenphoApiService {
     const perTableLimit = Math.max(limit, 50);
     const rawResults = await Promise.all(
       session.scaleTables.map((scaleTable) =>
-        this.fetchMeasurementsForTable(
+        this.fetchMeasurementsFromAllStores(
           session,
           scaleTable,
           scaleTable.user_ids,
@@ -711,7 +788,7 @@ export class RenphoApiService {
 
     const rawResults = await Promise.all(
       tablesToQuery.map((scaleTable) =>
-        this.fetchMeasurementsForTable(
+        this.fetchMeasurementsFromAllStores(
           session,
           scaleTable,
           [userId],

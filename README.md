@@ -106,6 +106,7 @@ Once configured, ask Claude:
 - Implements AES-128-ECB encryption for API communication
 - Handles JavaScript BigInt precision for large user IDs
 - Scans all discovered Renpho scale tables and scale-user IDs before selecting measurements for the current user
+- Reads both the legacy measurement store and the newer body-composition store, merging duplicate records while preferring the richer body-composition data
 - Includes a sync diagnostics tool to surface measurements associated with linked scale users but not currently selected for the logged-in user
 - Caches authentication tokens (50 min) and measurements (5 min) to reduce API calls
 
