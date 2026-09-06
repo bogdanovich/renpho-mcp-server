@@ -5,10 +5,11 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "renpho-mcp-server": "dist/index.js"
+    "renpho-mcp-server": "dist/index.js",
+    "renpho-sync-nutritiondb": "dist/sync-nutritiondb.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "tsc && chmod +x dist/index.js dist/sync-nutritiondb.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "tsx --test test/**/*.test.ts",
