@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { loginFailure } from "../utils/login-diagnostics.js";
 import { LRUCache } from "lru-cache";
 import {
   RenphoUser,
@@ -13,6 +14,7 @@ import {
 } from "../types/renpho.js";
 
 const API_BASE = "https://cloud.renpho.com";
+const APP_VERSION = "7.0.0";
 const ENCRYPTION_SECRET = "ed*wijdi$h6fe3ew";
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_MEASUREMENT_SCAN = 1000;
@@ -247,7 +249,7 @@ export class RenphoApiService {
           "Content-Type": "application/json",
           token: session.token,
           userId: session.userId,
-          appVersion: "7.0.0",
+          appVersion: APP_VERSION,
           platform: "android",
         },
         body: JSON.stringify({
@@ -303,17 +305,18 @@ export class RenphoApiService {
     return JSON.parse(rawResponse) as T;
   }
 
-  private async authenticate(): Promise<CachedSession> {
-    if (this.sessionCache && this.sessionCache.expires_at > Date.now()) {
-      return this.sessionCache;
-    }
+  // This check performs exactly one login request and never queries/imports measurements.
+  async checkLogin(): Promise<void> {
+    await this.login();
+  }
 
+  private async login(): Promise<CachedSession> {
     const loginData = {
       questionnaire: {},
       login: {
         password: this.password,
         areaCode: "US",
-        appRevision: "7.0.0",
+        appRevision: APP_VERSION,
         cellphoneType: "MCP-Server",
         systemType: "11",
         email: this.email,
@@ -322,30 +325,56 @@ export class RenphoApiService {
       bindingList: { deviceTypes: ["2"] },
     };
 
-    const loginResponse = await fetch(
-      `${API_BASE}/renpho-aggregation/user/login`,
-      {
+    let loginResponse: Response;
+    try {
+      loginResponse = await fetch(`${API_BASE}/renpho-aggregation/user/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Renpho requires appVersion in the HTTP header to decrypt login;
+        // appRevision inside the encrypted body does not replace it.
+        headers: {
+          "Content-Type": "application/json",
+          appVersion: APP_VERSION,
+        },
         body: JSON.stringify({
           encryptData: this.encryptAES(JSON.stringify(loginData)),
         }),
-      },
-    );
-
-    const loginJson = (await loginResponse.json()) as {
-      code: number;
-      msg: string;
-      data: string;
-    };
-
-    if (loginJson.code !== 101) {
-      throw new Error(`Authentication failed: ${loginJson.msg}`);
+        signal: AbortSignal.timeout(15_000),
+        redirect: "manual",
+      });
+    } catch {
+      throw loginFailure(undefined, undefined, "network_error");
     }
 
-    const rawLoginData = this.decryptAES(loginJson.data);
-    const userData = JSON.parse(rawLoginData) as { login: Record<string, any> };
-    const login = userData.login;
+    let payload: unknown;
+    try {
+      payload = await loginResponse.json();
+    } catch {
+      throw loginFailure(loginResponse.status, undefined, "invalid_json");
+    }
+    const loginJson = payload as { code?: unknown; data?: unknown } | null;
+    if (!loginResponse.ok || loginJson?.code !== 101) {
+      throw loginFailure(loginResponse.status, payload);
+    }
+    if (typeof loginJson.data !== "string" || !loginJson.data) {
+      throw loginFailure(loginResponse.status, payload, "missing_login_data");
+    }
+
+    let rawLoginData: string;
+    let login: Record<string, any>;
+    try {
+      rawLoginData = this.decryptAES(loginJson.data);
+      login = JSON.parse(rawLoginData).login;
+      if (
+        !login ||
+        typeof login.token !== "string" ||
+        !login.token ||
+        login.id == null
+      ) {
+        throw new Error("Invalid login data");
+      }
+    } catch {
+      throw loginFailure(loginResponse.status, payload, "invalid_login_data");
+    }
 
     // Extract user ID as string to preserve precision for large integers
     const userId =
@@ -377,6 +406,15 @@ export class RenphoApiService {
       },
       expires_at: Date.now() + 50 * 60 * 1000,
     };
+
+    return temporarySession;
+  }
+
+  private async authenticate(): Promise<CachedSession> {
+    if (this.sessionCache && this.sessionCache.expires_at > Date.now()) {
+      return this.sessionCache;
+    }
+    const temporarySession = await this.login();
 
     const rawDeviceData = await this.postEncryptedRaw(
       "renpho-aggregation/device/count",
