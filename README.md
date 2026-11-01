@@ -110,6 +110,21 @@ Once configured, ask Claude:
 - Includes a sync diagnostics tool to surface measurements associated with linked scale users but not currently selected for the logged-in user
 - Caches authentication tokens (50 min) and measurements (5 min) to reduce API calls
 
+## Login troubleshooting
+
+Login requests must include the `appVersion` HTTP header as well as `login.appRevision`
+in the encrypted JSON body. Renpho can return HTTP 200 with code `-114` and a
+misleading decryption error when the header is missing, even with the correct AES key
+and password. Keep both version values consistent.
+
+With credentials configured in the environment, `node dist/check-login.js` performs
+one login request without reading devices or measurements. It reports only a status,
+numeric code, and a bounded error category; it does not retry or print credentials.
+
+The Android 7.11.0 native email-login form accepts 6–16 characters. This client sends
+the saved password unchanged; it does not silently truncate passwords. A password
+length problem is separate from the missing-header failure described above.
+
 ## Known Wi-Fi Scale Sync Caveat
 
 Some Wi-Fi scales appear to upload measurements that are not immediately bound to the expected Renpho user until the mobile app performs additional sync logic. This server now helps debug that state with `get_scale_users`, `get_sync_diagnostics`, and `refresh_data`, but the exact server-side binding call used by the app is still being investigated.
